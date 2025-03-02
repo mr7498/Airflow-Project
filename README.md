@@ -3,84 +3,86 @@
 This project was generated using the Astronomer CLI with the command `astro dev init`. It provides a pre-configured Airflow development environment that enables you to build, test, and deploy robust data pipelines quickly.
 
 **ETL Overview:**  
-- **Extraction:**  
-  The ingestion DAG fetches historical weather data from the Open-Meteo Archive API and loads the raw JSON data into a PostgreSQL staging table. It ensures that only new data is stored by checking for duplicates.
-  
+- **Extraction & Ingestion:**  
+  The ingestion DAG fetches historical weather data from the Open-Meteo Archive API and loads the raw JSON data into a PostgreSQL staging table. Since the data is static (i.e., it does not change over time for the given historical range), before inserting new data, any existing raw data is deleted. This avoids storage issues and prevents duplication while ensuring that the database always contains only the latest dataset.
+
 - **Transformation:**  
-  The transformation DAG retrieves the latest raw data, parses it to extract hourly temperature records, and attaches an ingestion timestamp for traceability. It then loads this structured data into a final PostgreSQL table, ensuring that duplicate transformed entries are avoided.
-  
-Together, these ETL pipelines enable you to efficiently process and analyze historical weather data in a reliable, production-ready Airflow environment.
+  The transformation DAG retrieves the latest raw data from the staging table, transforms it by extracting hourly temperature records and attaching the ingestion timestamp, and then loads this structured data into a final PostgreSQL table. Before loading, any existing data in the final table is deleted so that only the fresh transformed data is stored, preventing unnecessary storage accumulation.
+
+Together, these ETL pipelines efficiently process and manage historical weather data while optimizing database storage and avoiding redundant records.
 
 # Project Contents
 
 Your Astro project contains the following files and folders that support your Airflow development workflow:
 
 - **dags/**  
-  This folder contains the Python files for your Airflow DAGs.
+  Contains the Python files for your Airflow DAGs.
   - **Custom Ingestion DAG – `historical_weather_ingestion`**  
-    This DAG extracts historical weather data from the Open-Meteo Archive API and loads the raw JSON data into a PostgreSQL staging table. It is scheduled to run daily at 07:00 AM and includes logic to check for duplicate data before insertion.
+    - Fetches historical weather data from the Open-Meteo Archive API.
+    - Deletes any existing raw data from the PostgreSQL staging table and inserts the new raw JSON data with a fixed primary key (id=1).
+    - Ensures that only one record exists to prevent unnecessary data accumulation.
+    - Scheduled to run daily at 07:00 AM.
     
-    **Key features:**
-    - Uses Airflow’s `HttpHook` to call the API.
-    - Converts API responses to JSON and stores them in the `raw_historical_weather_data` table.
-    - Prevents duplicate entries by comparing new API data with the most recent stored record.
-  
   - **Custom Transformation DAG – `historical_weather_transformation`**  
-    This DAG retrieves the latest raw weather data from the staging table, transforms it into a structured format, and loads it into a final PostgreSQL table. It is scheduled to run daily at 07:30 AM.
-    
-    **Key features:**
-    - Extracts raw data along with its ingestion timestamp from PostgreSQL.
-    - Processes the raw JSON data to extract hourly temperature data.
-    - Attaches the ingestion timestamp for traceability.
-    - Checks for duplicate transformed data before loading it into the `historical_weather_data` table.
-
+    - Retrieves the latest raw data along with its ingestion timestamp from the staging table.
+    - Transforms the raw JSON data into structured hourly temperature records.
+    - Deletes any existing records in the final table before inserting new transformed data.
+    - Ensures that only the latest transformed data is stored, optimizing storage usage.
+    - Triggered externally (typically by the ingestion DAG after successful data loading).
+  
 - **Dockerfile**  
-  This file defines the Astro Runtime Docker image used to run your Airflow instance. It provides a controlled environment with all necessary dependencies. You can customize this file to include additional commands or override runtime settings.
-
+  Defines the Astro Runtime Docker image used to run your Airflow instance, providing a controlled environment with all necessary dependencies.
+  
 - **include/**  
-  Place any auxiliary files (such as SQL scripts, configuration files, or static resources) that your DAGs or other project components require in this folder.
-
+  Contains auxiliary files (e.g., SQL scripts, configuration files, static resources) required by your DAGs or project components.
+  
 - **packages.txt**  
-  List any OS-level packages that your project requires. This file is used during the build process of your Docker image.
-
+  Lists any OS-level packages that your project requires; used during the Docker image build process.
+  
 - **requirements.txt**  
-  Specify the Python packages your project depends on. When you build your Docker image or deploy your code, these packages will be installed.
-
+  Specifies the Python packages your project depends on; these are installed during Docker image build or deployment.
+  
 - **plugins/**  
-  Add any custom or third-party Airflow plugins in this directory to extend Airflow’s capabilities.
-
+  Contains custom or third-party Airflow plugins to extend Airflow’s capabilities.
+  
 - **airflow_settings.yaml**  
-  Use this file to define Airflow Connections, Variables, and Pools locally. This can streamline your development process by avoiding manual configuration via the Airflow UI.
+  Defines Airflow Connections, Variables, and Pools locally, streamlining configuration during development.
 
 # Ingestion and Transformation Code
 
 ### Ingestion DAG – `historical_weather_ingestion`
 - **Purpose:**  
-  This DAG is responsible for fetching historical weather data from the Open-Meteo API and loading it into a staging table in PostgreSQL.
-
+  Fetches historical weather data from the Open-Meteo API and loads it into a PostgreSQL staging table.
+  
 - **Implementation Highlights:**  
   - **Data Extraction:**  
     Uses Airflow’s `HttpHook` to make a GET request to the Open-Meteo Archive API, retrieving JSON data for a specified latitude, longitude, and date range.
-  - **Data Loading:**  
-    Stores the retrieved JSON data in a PostgreSQL table named `raw_historical_weather_data`.
-  - **Duplicate Check:**  
-    Compares the new JSON data (with sorted keys) against the most recent record to ensure only new data is loaded.
+  - **Data Management:**  
+    - Deletes any existing raw data from the staging table before inserting new data.
+    - Inserts the new raw JSON data with a fixed primary key (id=1), ensuring that the table always contains the latest record.
+  - **Avoiding Storage Issues:**  
+    - Since the historical data remains unchanged over time, keeping multiple copies is unnecessary.
+    - By maintaining only the latest record, storage usage is minimized, and duplication is prevented.
   - **Scheduling:**  
     Scheduled to run daily at 07:00 AM.
 
 ### Transformation DAG – `historical_weather_transformation`
 - **Purpose:**  
-  This DAG transforms the raw weather data from the ingestion phase into a structured format, then loads it into a final PostgreSQL table.
-
+  Transforms raw weather data from the staging table into a structured format and loads it into a final PostgreSQL table.
+  
 - **Implementation Highlights:**  
   - **Data Extraction:**  
-    Retrieves the latest raw record along with its ingestion timestamp from the staging table.
+    Retrieves the most recent raw record along with its ingestion timestamp from the staging table.
   - **Data Transformation:**  
-    Parses the raw JSON to extract hourly temperature data and attaches the ingestion timestamp for traceability.
-  - **Data Loading:**  
-    Inserts the transformed data into the `historical_weather_data` table only if records with the same ingestion timestamp do not already exist.
+    Parses the raw JSON data to extract hourly temperature records and attaches the ingestion timestamp for traceability.
+  - **Data Management:**  
+    - Deletes any existing records in the final table before inserting new transformed data.
+    - Ensures that only the latest transformed data is stored to prevent unnecessary accumulation.
+  - **Avoiding Storage Issues:**  
+    - Since the historical data is static, transformed data does not need to be duplicated over multiple runs.
+    - This deletion-before-insertion strategy prevents unnecessary growth of the table and optimizes database efficiency.
   - **Scheduling:**  
-    Scheduled to run daily at 07:30 AM.
+    Triggered externally (usually by the ingestion DAG) once data ingestion is complete.
 
 # Deploy Your Project Locally
 
@@ -97,7 +99,7 @@ To begin developing and testing your DAGs locally, follow these steps:
    Use `docker ps` to ensure that all required containers have been created successfully.
 
 3. **Access the Airflow UI:**  
-   Open your web browser and navigate to [http://localhost:8080/]. Log in with the default credentials (`admin`/`admin`). Here, you can view, trigger, and monitor your DAGs.
+   Open your web browser and navigate to [http://localhost:8080/](http://localhost:8080/). Log in with the default credentials (`admin`/`admin`). Here, you can view, trigger, and monitor your DAGs.
 
 4. **Access the PostgreSQL Database:**  
    Your Airflow metadata is stored in a PostgreSQL database, accessible at `localhost:5432/postgres`.
